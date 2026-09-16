@@ -4,7 +4,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog
 from PIL import Image, ImageTk
-from openset import display_label, load_image, load_model, open_set_predict, probabilities, seed_everything
+from openset import configure_device, display_label, load_image, load_model, open_set_predict, probabilities, seed_everything
 
 class Application:
     def __init__(self, dataset: str):
@@ -21,5 +21,5 @@ class Application:
         self.result.configure(text=f"识别结果：{label}\n置信度：{prob.max():.2%}\n类别原型距离：{distance[0]:.4f}\n开放集判定：{'已知类别' if known[0] else '未知类别'}")
     def run(self): self.root.mainloop()
 def main():
-    p=argparse.ArgumentParser();p.add_argument("--dataset",choices=["dataset1","dataset2"],required=True);args=p.parse_args();Application(args.dataset).run()
+    p=argparse.ArgumentParser();p.add_argument("--dataset",choices=["dataset1","dataset2"],required=True);p.add_argument("--device",choices=["auto","cpu","gpu"],default="auto");args=p.parse_args();configure_device(args.device);Application(args.dataset).run()
 if __name__=="__main__":main()

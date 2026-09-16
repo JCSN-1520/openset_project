@@ -4,13 +4,14 @@ from pathlib import Path
 import numpy as np
 from openset import (Adam, NumpyCNN, batches, calibrate_open_set, collect_dataset, draw_report,
                      predict_batches, probabilities, save_model, seed_everything, stratified_split)
+from openset import configure_device
 
 
 def evaluate(model, paths, labels, size, batch_size):
     rng = seed_everything(2026); losses=[]; correct=[]
     for x, y in batches(paths, labels, batch_size, size, False, rng, shuffle=False):
         logits, _ = model.forward(x); p = probabilities(logits)
-        losses.append(-np.log(p[np.arange(len(y)), y] + 1e-12).mean()); correct.append((p.argmax(1) == y).sum())
+        losses.append(float(-np.log(p[np.arange(len(y)), y] + 1e-12).mean())); correct.append(int((p.argmax(1) == y).sum()))
     return float(np.mean(losses)), float(np.sum(correct) / len(labels))
 
 
@@ -21,7 +22,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=24); parser.add_argument("--image-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3); parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-ratio", type=float, default=.1, help="从全部样本中按类别留作验证的比例")
-    args = parser.parse_args(); rng = seed_everything(args.seed)
+    parser.add_argument("--device", choices=["auto", "cpu", "gpu"], default="auto", help="auto 会优先使用 CuPy GPU")
+    args = parser.parse_args(); print("计算设备：", configure_device(args.device)); rng = seed_everything(args.seed)
     given_train_p, given_train_l, given_valid_p, given_valid_l = collect_dataset(Path(args.data_root) / args.dataset)
     # 题目数据的两个文件夹均为可用标注数据；合并后再按类别划分，确保全部类别参与训练。
     all_paths, all_labels = given_train_p + given_valid_p, given_train_l + given_valid_l

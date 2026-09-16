@@ -21,6 +21,8 @@ python train.py --dataset dataset2 --epochs 35
 
 训练结果会写入 `outputs/dataset1` 或 `outputs/dataset2`：最佳模型、类别表、开放集阈值、训练曲线、混淆矩阵和验证指标都保存在对应目录。
 
+已安装 `cupy-cuda11x` 时会自动使用 NVIDIA GPU；需要强制指定时，可加 `--device gpu`。无法使用 GPU 时会自动回退至 CPU，例如 `python train.py --dataset dataset1 --device cpu`。
+
 ## 单张预测与演示
 
 ```bash

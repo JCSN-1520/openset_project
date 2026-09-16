@@ -1,10 +1,10 @@
 from __future__ import annotations
 import argparse
 from pathlib import Path
-from openset import display_label, load_image, load_model, open_set_predict, probabilities, seed_everything
+from openset import configure_device, display_label, load_image, load_model, open_set_predict, probabilities, seed_everything
 
 def main():
-    p=argparse.ArgumentParser(description="单张开放集识别"); p.add_argument("--dataset",choices=["dataset1","dataset2"],required=True); p.add_argument("--image",required=True); args=p.parse_args()
+    p=argparse.ArgumentParser(description="单张开放集识别"); p.add_argument("--dataset",choices=["dataset1","dataset2"],required=True); p.add_argument("--image",required=True); p.add_argument("--device",choices=["auto","cpu","gpu"],default="auto"); args=p.parse_args(); configure_device(args.device)
     model,classes,config,size=load_model(Path("outputs")/args.dataset/"best_model.npz")
     x=load_image(Path(args.image),size,False,seed_everything(0))[None]; logits,features=model.forward(x); prob=probabilities(logits); labels,known,distance=open_set_predict(prob,features,config)
     result=display_label(classes[labels[0]]) if known[0] else "未知类别"
