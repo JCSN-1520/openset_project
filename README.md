@@ -15,13 +15,15 @@ pip install -r requirements.txt
 在 PyCharm 中将工作目录设为项目根目录，运行：
 
 ```bash
-python train.py --dataset dataset1 --epochs 35
-python train.py --dataset dataset2 --epochs 35
+python train.py --dataset dataset1
+python train.py --dataset dataset2
 ```
 
 训练结果会写入 `outputs/dataset1` 或 `outputs/dataset2`：最佳模型、类别表、开放集阈值、训练曲线、混淆矩阵和验证指标都保存在对应目录。
 
 已安装 `cupy-cuda11x` 时会自动使用 NVIDIA GPU；需要强制指定时，可加 `--device gpu`。无法使用 GPU 时会自动回退至 CPU，例如 `python train.py --dataset dataset1 --device cpu`。
+
+不熟悉命令行时，可直接双击 `一键训练鸟类模型.bat`、`一键训练动物模型.bat` 或 `启动图片识别界面.bat`。首次训练会花较长时间，训练结束前不要关闭弹出的窗口。
 
 ## 单张预测与演示
 

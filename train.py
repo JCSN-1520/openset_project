@@ -4,23 +4,24 @@ from pathlib import Path
 import numpy as np
 from openset import (Adam, NumpyCNN, batches, calibrate_open_set, collect_dataset, draw_report,
                      predict_batches, probabilities, save_model, seed_everything, stratified_split)
-from openset import configure_device
+from openset import array_module, configure_device
 
 
 def evaluate(model, paths, labels, size, batch_size):
     rng = seed_everything(2026); losses=[]; correct=[]
+    backend = array_module()
     for x, y in batches(paths, labels, batch_size, size, False, rng, shuffle=False):
         logits, _ = model.forward(x); p = probabilities(logits)
-        losses.append(float(-np.log(p[np.arange(len(y)), y] + 1e-12).mean())); correct.append(int((p.argmax(1) == y).sum()))
+        losses.append(float(-backend.log(p[backend.arange(len(y)), y] + 1e-12).mean())); correct.append(int((p.argmax(1) == y).sum()))
     return float(np.mean(losses)), float(np.sum(correct) / len(labels))
 
 
 def main():
     parser = argparse.ArgumentParser(description="纯 NumPy 开集识别训练")
     parser.add_argument("--dataset", choices=["dataset1", "dataset2"], required=True)
-    parser.add_argument("--data-root", default="data"); parser.add_argument("--epochs", type=int, default=35)
-    parser.add_argument("--batch-size", type=int, default=24); parser.add_argument("--image-size", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=1e-3); parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--data-root", default="data"); parser.add_argument("--epochs", type=int, default=70)
+    parser.add_argument("--batch-size", type=int, default=32); parser.add_argument("--image-size", type=int, default=96)
+    parser.add_argument("--lr", type=float, default=8e-4); parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-ratio", type=float, default=.1, help="从全部样本中按类别留作验证的比例")
     parser.add_argument("--device", choices=["auto", "cpu", "gpu"], default="auto", help="auto 会优先使用 CuPy GPU")
     args = parser.parse_args(); print("计算设备：", configure_device(args.device)); rng = seed_everything(args.seed)
@@ -31,11 +32,12 @@ def main():
     classes = sorted(set(all_labels)); index = {name:i for i,name in enumerate(classes)}
     y_train=np.array([index[x] for x in train_l]); y_valid=np.array([index[x] for x in valid_l])
     print(f"{args.dataset}: 全部 {len(all_paths)} 张、{len(classes)} 类；训练 {len(train_p)} 张，验证 {len(valid_p)} 张")
+    counts=np.bincount(y_train, minlength=len(classes)); sample_weights=1.0 / counts[y_train]
     model=NumpyCNN(len(classes), rng); optimizer=Adam(model, args.lr); best_acc=-1.; best_state=None
     history={"loss":[], "acc":[], "val_loss":[], "val_acc":[]}
     for epoch in range(1, args.epochs + 1):
         losses=[]; hits=[]; count=0
-        for x,y in batches(train_p, y_train, args.batch_size, args.image_size, True, rng):
+        for x,y in batches(train_p, y_train, args.batch_size, args.image_size, True, rng, sample_weights=sample_weights):
             loss,acc=model.loss_backward(x,y); optimizer.step(model); losses.append(loss); hits.append(acc*len(y)); count += len(y)
         vl,va=evaluate(model, valid_p,y_valid,args.image_size,args.batch_size)
         history["loss"].append(float(np.mean(losses))); history["acc"].append(float(np.sum(hits)/count)); history["val_loss"].append(vl); history["val_acc"].append(va)

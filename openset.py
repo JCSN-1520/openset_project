@@ -38,6 +38,11 @@ def to_cpu(value):
     return xp.asnumpy(value) if DEVICE == "gpu" else np.asarray(value)
 
 
+def array_module():
+    """返回当前计算后端；供训练脚本在 GPU 模式下使用。"""
+    return xp
+
+
 def seed_everything(seed: int = 42) -> np.random.Generator:
     return np.random.default_rng(seed)
 
@@ -108,14 +113,21 @@ def load_image(path: Path, size: int, augment: bool, rng: np.random.Generator) -
     if augment:
         if rng.random() < 0.5:
             array = array[:, ::-1]
-        array = np.clip(array * rng.uniform(0.85, 1.15) + rng.uniform(-0.05, 0.05), 0, 1)
+        # 亮度、对比度和轻微噪声用于提升对拍摄环境变化的鲁棒性。
+        array = np.clip(array * rng.uniform(0.78, 1.22) + rng.uniform(-0.08, 0.08), 0, 1)
+        if rng.random() < 0.25:
+            array = np.clip(array + rng.normal(0, 0.015, array.shape), 0, 1)
     return (array - 0.5) / 0.5
 
 
 def batches(paths: list[Path], labels: np.ndarray, batch_size: int, size: int, augment: bool,
-            rng: np.random.Generator, shuffle: bool = True) -> Iterable[tuple[np.ndarray, np.ndarray]]:
+            rng: np.random.Generator, shuffle: bool = True, sample_weights: np.ndarray | None = None) -> Iterable[tuple[np.ndarray, np.ndarray]]:
     labels = xp.asarray(labels, dtype=xp.int64)
-    order = rng.permutation(len(paths)) if shuffle else np.arange(len(paths))
+    if shuffle and sample_weights is not None:
+        weights = np.asarray(sample_weights, dtype=np.float64); weights /= weights.sum()
+        order = rng.choice(len(paths), size=len(paths), replace=True, p=weights)
+    else:
+        order = rng.permutation(len(paths)) if shuffle else np.arange(len(paths))
     for start in range(0, len(order), batch_size):
         idx = order[start:start + batch_size]
         x = xp.asarray(np.stack([load_image(paths[i], size, augment, rng) for i in idx]))
@@ -160,33 +172,40 @@ class Conv2D:
 
 
 class NumpyCNN:
-    """两层卷积 + 全局平均池化的轻量网络，含完整反向传播。"""
+    """三层卷积 + 隐藏全连接层的轻量网络，含完整反向传播。"""
     def __init__(self, classes: int, rng: np.random.Generator):
-        self.conv1, self.conv2 = Conv2D(3, 12, rng), Conv2D(12, 24, rng)
-        self.fc_w = xp.asarray(rng.normal(0, np.sqrt(2 / 24), (24, classes)).astype(np.float32))
-        self.fc_b = xp.zeros(classes, dtype=xp.float32)
-        self.dfc_w, self.dfc_b = xp.zeros_like(self.fc_w), xp.zeros_like(self.fc_b)
-        self.params = [self.conv1.w, self.conv1.b, self.conv2.w, self.conv2.b, self.fc_w, self.fc_b]
-        self.grads = [self.conv1.dw, self.conv1.db, self.conv2.dw, self.conv2.db, self.dfc_w, self.dfc_b]
+        self.conv1, self.conv2, self.conv3 = Conv2D(3, 24, rng), Conv2D(24, 48, rng), Conv2D(48, 64, rng)
+        self.fc1_w = xp.asarray(rng.normal(0, np.sqrt(2 / 64), (64, 128)).astype(np.float32)); self.fc1_b = xp.zeros(128, dtype=xp.float32)
+        self.fc2_w = xp.asarray(rng.normal(0, np.sqrt(2 / 128), (128, classes)).astype(np.float32)); self.fc2_b = xp.zeros(classes, dtype=xp.float32)
+        self.dfc1_w, self.dfc1_b = xp.zeros_like(self.fc1_w), xp.zeros_like(self.fc1_b)
+        self.dfc2_w, self.dfc2_b = xp.zeros_like(self.fc2_w), xp.zeros_like(self.fc2_b)
+        self.params = [self.conv1.w, self.conv1.b, self.conv2.w, self.conv2.b, self.conv3.w, self.conv3.b, self.fc1_w, self.fc1_b, self.fc2_w, self.fc2_b]
+        self.grads = [self.conv1.dw, self.conv1.db, self.conv2.dw, self.conv2.db, self.conv3.dw, self.conv3.db, self.dfc1_w, self.dfc1_b, self.dfc2_w, self.dfc2_b]
 
     def forward(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         self.z1 = self.conv1.forward(x); self.a1 = xp.maximum(self.z1, 0)
         self.z2 = self.conv2.forward(self.a1); self.a2 = xp.maximum(self.z2, 0)
-        self.features = self.a2.mean(axis=(1, 2))
-        return self.features @ self.fc_w + self.fc_b, self.features
+        self.z3 = self.conv3.forward(self.a2); self.a3 = xp.maximum(self.z3, 0)
+        self.features = self.a3.mean(axis=(1, 2))
+        self.hidden_pre = self.features @ self.fc1_w + self.fc1_b; self.hidden = xp.maximum(self.hidden_pre, 0)
+        return self.hidden @ self.fc2_w + self.fc2_b, self.features
 
     def loss_backward(self, x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
         logits, _ = self.forward(x)
         shifted = logits - logits.max(axis=1, keepdims=True)
         prob = xp.exp(shifted); prob /= prob.sum(axis=1, keepdims=True)
         loss = -xp.log(prob[xp.arange(len(y)), y] + 1e-12).mean()
-        grad = prob; grad[xp.arange(len(y)), y] -= 1; grad /= len(y)
-        self.dfc_w[...] = self.features.T @ grad; self.dfc_b[...] = grad.sum(axis=0)
-        df = grad @ self.fc_w.T
-        da2 = xp.broadcast_to(df[:, None, None, :] / (self.a2.shape[1] * self.a2.shape[2]), self.a2.shape).copy()
-        dz2 = da2 * (self.z2 > 0); da1 = self.conv2.backward(dz2)
+        accuracy = float((prob.argmax(axis=1) == y).mean())
+        grad = prob.copy(); grad[xp.arange(len(y)), y] -= 1; grad /= len(y)
+        self.dfc2_w[...] = self.hidden.T @ grad; self.dfc2_b[...] = grad.sum(axis=0)
+        dh = grad @ self.fc2_w.T; dh_pre = dh * (self.hidden_pre > 0)
+        self.dfc1_w[...] = self.features.T @ dh_pre; self.dfc1_b[...] = dh_pre.sum(axis=0)
+        df = dh_pre @ self.fc1_w.T
+        da3 = xp.broadcast_to(df[:, None, None, :] / (self.a3.shape[1] * self.a3.shape[2]), self.a3.shape).copy()
+        da2 = self.conv3.backward(da3 * (self.z3 > 0))
+        da1 = self.conv2.backward(da2 * (self.z2 > 0))
         self.conv1.backward(da1 * (self.z1 > 0))
-        return float(loss), float((prob.argmax(axis=1) == y).mean())
+        return float(loss), accuracy
 
     def state_dict(self) -> dict[str, np.ndarray]:
         return {f"p{i}": p for i, p in enumerate(self.params)}
@@ -204,7 +223,7 @@ class Adam:
         self.t += 1
         for p, g, m, v in zip(model.params, model.grads, self.m, self.v):
             m[:] = .9 * m + .1 * g; v[:] = .999 * v + .001 * g * g
-            p[:] -= self.lr * (m / (1 - .9 ** self.t)) / (np.sqrt(v / (1 - .999 ** self.t)) + 1e-8)
+            p[:] -= self.lr * (m / (1 - .9 ** self.t)) / (xp.sqrt(v / (1 - .999 ** self.t)) + 1e-8)
 
 
 @dataclass

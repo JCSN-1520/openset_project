@@ -1,4 +1,5 @@
 numpy>=1.24
 Pillow>=10.0
 matplotlib>=3.7
-
+# NVIDIA GPU acceleration. 仅在已安装 CUDA 11.x 驱动的电脑上需要。
+cupy-cuda11x>=13.0

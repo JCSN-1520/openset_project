@@ -1,0 +1,6 @@
+@echo off
+chcp 65001 >nul
+cd /d "%~dp0"
+call D:\anaconda\Scripts\activate.bat openset
+python app.py --dataset dataset2 --device gpu
+pause
