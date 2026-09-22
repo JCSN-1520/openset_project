@@ -1,0 +1,30 @@
+{
+  "classes": [
+    "chimpanzee",
+    "giant+panda",
+    "hippopotamus",
+    "humpback+whale",
+    "leopard",
+    "mouse",
+    "otter",
+    "ox",
+    "persian+cat",
+    "pig",
+    "polar+bear",
+    "rabbit",
+    "raccoon",
+    "rat",
+    "rhinoceros",
+    "sheep",
+    "siamese+cat",
+    "skunk",
+    "spider+monkey",
+    "squirrel",
+    "tiger",
+    "walrus",
+    "weasel",
+    "wolf",
+    "zebra"
+  ],
+  "image_size": 96
+}

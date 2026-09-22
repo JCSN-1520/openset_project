@@ -1,0 +1,9 @@
+{
+  "dataset": "dataset2",
+  "classes": 25,
+  "train_images": 12991,
+  "valid_images": 1444,
+  "best_valid_accuracy": 0.546398891966759,
+  "confidence_threshold": 0.2210542231798172,
+  "distance_threshold": 16.89997100830074
+}
