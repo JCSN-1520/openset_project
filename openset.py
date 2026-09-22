@@ -135,23 +135,24 @@ def batches(paths: list[Path], labels: np.ndarray, batch_size: int, size: int, a
 
 
 class Conv2D:
-    def __init__(self, in_channels: int, out_channels: int, rng: np.random.Generator):
+    def __init__(self, in_channels: int, out_channels: int, rng: np.random.Generator, stride: int = 1):
         scale = np.sqrt(2.0 / (in_channels * 9))
         self.w = xp.asarray(rng.normal(0, scale, (out_channels, in_channels, 3, 3)).astype(np.float32))
         self.b = xp.zeros(out_channels, dtype=xp.float32)
         self.dw, self.db = xp.zeros_like(self.w), xp.zeros_like(self.b)
+        self.stride = stride
 
     def forward(self, x: np.ndarray) -> np.ndarray:
-        # SAME 3x3 convolution, stride 2. Layout: NHWC.
+        # SAME 3x3 convolution. Layout: NHWC.
         self.x_shape = x.shape
         padded = xp.pad(x, ((0, 0), (1, 1), (1, 1), (0, 0)))
         self.padded = padded
         b, h, w, c = x.shape
-        oh, ow = (h + 1) // 2, (w + 1) // 2
+        oh, ow = (h + self.stride - 1) // self.stride, (w + self.stride - 1) // self.stride
         self.cols = xp.empty((b, oh, ow, c * 9), dtype=xp.float32)
         for iy in range(3):
             for ix in range(3):
-                self.cols[..., (iy * 3 + ix) * c:(iy * 3 + ix + 1) * c] = padded[:, iy:iy + oh * 2:2, ix:ix + ow * 2:2, :]
+                self.cols[..., (iy * 3 + ix) * c:(iy * 3 + ix + 1) * c] = padded[:, iy:iy + oh * self.stride:self.stride, ix:ix + ow * self.stride:self.stride, :]
         kernel = self.w.transpose(0, 2, 3, 1).reshape(self.w.shape[0], -1)
         return (self.cols.reshape(-1, c * 9) @ kernel.T + self.b).reshape(b, oh, ow, -1)
 
@@ -167,44 +168,77 @@ class Conv2D:
         dpadded = xp.zeros_like(self.padded)
         for iy in range(3):
             for ix in range(3):
-                dpadded[:, iy:iy + oh * 2:2, ix:ix + ow * 2:2, :] += dcol[:, :, :, iy, ix, :]
+                dpadded[:, iy:iy + oh * self.stride:self.stride, ix:ix + ow * self.stride:self.stride, :] += dcol[:, :, :, iy, ix, :]
         return dpadded[:, 1:-1, 1:-1, :]
 
 
+class MaxPool2D:
+    """VGG 风格的 2×2 最大池化层，包含手写反向传播。"""
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        self.input_shape = x.shape
+        b, h, w, c = x.shape; h2, w2 = h // 2, w // 2
+        self.crop_shape = (h2 * 2, w2 * 2)
+        windows = x[:, :h2 * 2, :w2 * 2, :].reshape(b, h2, 2, w2, 2, c).transpose(0, 1, 3, 5, 2, 4)
+        flat = windows.reshape(b, h2, w2, c, 4)
+        self.argmax = flat.argmax(axis=-1)
+        return flat.max(axis=-1)
+
+    def backward(self, grad: np.ndarray) -> np.ndarray:
+        b, h2, w2, c = grad.shape
+        flat = xp.zeros((b, h2, w2, c, 4), dtype=grad.dtype)
+        flat[xp.arange(b)[:, None, None, None], xp.arange(h2)[None, :, None, None], xp.arange(w2)[None, None, :, None], xp.arange(c)[None, None, None, :], self.argmax] = grad
+        windows = flat.reshape(b, h2, w2, c, 2, 2).transpose(0, 1, 4, 2, 5, 3)
+        dx = xp.zeros(self.input_shape, dtype=grad.dtype)
+        h, w = self.crop_shape
+        dx[:, :h, :w, :] = windows.reshape(b, h, w, c)
+        return dx
+
+
 class NumpyCNN:
-    """三层卷积 + 隐藏全连接层的轻量网络，含完整反向传播。"""
+    """手写 Mini-VGG：3×3 卷积堆叠、最大池化和 Dropout。"""
     def __init__(self, classes: int, rng: np.random.Generator):
-        self.conv1, self.conv2, self.conv3 = Conv2D(3, 24, rng), Conv2D(24, 48, rng), Conv2D(48, 64, rng)
-        self.fc1_w = xp.asarray(rng.normal(0, np.sqrt(2 / 64), (64, 128)).astype(np.float32)); self.fc1_b = xp.zeros(128, dtype=xp.float32)
-        self.fc2_w = xp.asarray(rng.normal(0, np.sqrt(2 / 128), (128, classes)).astype(np.float32)); self.fc2_b = xp.zeros(classes, dtype=xp.float32)
+        self.rng = rng; self.dropout_rate = .35
+        self.conv1a, self.conv1b = Conv2D(3, 24, rng), Conv2D(24, 24, rng); self.pool1 = MaxPool2D()
+        self.conv2a, self.conv2b = Conv2D(24, 48, rng), Conv2D(48, 48, rng); self.pool2 = MaxPool2D()
+        self.conv3 = Conv2D(48, 96, rng); self.pool3 = MaxPool2D()
+        self.fc1_w = xp.asarray(rng.normal(0, np.sqrt(2 / 96), (96, 256)).astype(np.float32)); self.fc1_b = xp.zeros(256, dtype=xp.float32)
+        self.fc2_w = xp.asarray(rng.normal(0, np.sqrt(2 / 256), (256, classes)).astype(np.float32)); self.fc2_b = xp.zeros(classes, dtype=xp.float32)
         self.dfc1_w, self.dfc1_b = xp.zeros_like(self.fc1_w), xp.zeros_like(self.fc1_b)
         self.dfc2_w, self.dfc2_b = xp.zeros_like(self.fc2_w), xp.zeros_like(self.fc2_b)
-        self.params = [self.conv1.w, self.conv1.b, self.conv2.w, self.conv2.b, self.conv3.w, self.conv3.b, self.fc1_w, self.fc1_b, self.fc2_w, self.fc2_b]
-        self.grads = [self.conv1.dw, self.conv1.db, self.conv2.dw, self.conv2.db, self.conv3.dw, self.conv3.db, self.dfc1_w, self.dfc1_b, self.dfc2_w, self.dfc2_b]
+        self.params = [self.conv1a.w, self.conv1a.b, self.conv1b.w, self.conv1b.b, self.conv2a.w, self.conv2a.b, self.conv2b.w, self.conv2b.b, self.conv3.w, self.conv3.b, self.fc1_w, self.fc1_b, self.fc2_w, self.fc2_b]
+        self.grads = [self.conv1a.dw, self.conv1a.db, self.conv1b.dw, self.conv1b.db, self.conv2a.dw, self.conv2a.db, self.conv2b.dw, self.conv2b.db, self.conv3.dw, self.conv3.db, self.dfc1_w, self.dfc1_b, self.dfc2_w, self.dfc2_b]
 
-    def forward(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        self.z1 = self.conv1.forward(x); self.a1 = xp.maximum(self.z1, 0)
-        self.z2 = self.conv2.forward(self.a1); self.a2 = xp.maximum(self.z2, 0)
-        self.z3 = self.conv3.forward(self.a2); self.a3 = xp.maximum(self.z3, 0)
-        self.features = self.a3.mean(axis=(1, 2))
+    def forward(self, x: np.ndarray, training: bool = False) -> tuple[np.ndarray, np.ndarray]:
+        self.z1a = self.conv1a.forward(x); self.a1a = xp.maximum(self.z1a, 0)
+        self.z1b = self.conv1b.forward(self.a1a); self.a1b = xp.maximum(self.z1b, 0); self.p1 = self.pool1.forward(self.a1b)
+        self.z2a = self.conv2a.forward(self.p1); self.a2a = xp.maximum(self.z2a, 0)
+        self.z2b = self.conv2b.forward(self.a2a); self.a2b = xp.maximum(self.z2b, 0); self.p2 = self.pool2.forward(self.a2b)
+        self.z3 = self.conv3.forward(self.p2); self.a3 = xp.maximum(self.z3, 0); self.p3 = self.pool3.forward(self.a3)
+        self.features = self.p3.mean(axis=(1, 2))
         self.hidden_pre = self.features @ self.fc1_w + self.fc1_b; self.hidden = xp.maximum(self.hidden_pre, 0)
-        return self.hidden @ self.fc2_w + self.fc2_b, self.features
+        if training:
+            self.dropout_mask = xp.asarray(self.rng.random(self.hidden.shape) >= self.dropout_rate, dtype=xp.float32) / (1 - self.dropout_rate)
+            self.hidden_used = self.hidden * self.dropout_mask
+        else:
+            self.hidden_used = self.hidden
+        return self.hidden_used @ self.fc2_w + self.fc2_b, self.features
 
     def loss_backward(self, x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-        logits, _ = self.forward(x)
+        logits, _ = self.forward(x, training=True)
         shifted = logits - logits.max(axis=1, keepdims=True)
         prob = xp.exp(shifted); prob /= prob.sum(axis=1, keepdims=True)
         loss = -xp.log(prob[xp.arange(len(y)), y] + 1e-12).mean()
         accuracy = float((prob.argmax(axis=1) == y).mean())
         grad = prob.copy(); grad[xp.arange(len(y)), y] -= 1; grad /= len(y)
-        self.dfc2_w[...] = self.hidden.T @ grad; self.dfc2_b[...] = grad.sum(axis=0)
-        dh = grad @ self.fc2_w.T; dh_pre = dh * (self.hidden_pre > 0)
+        self.dfc2_w[...] = self.hidden_used.T @ grad; self.dfc2_b[...] = grad.sum(axis=0)
+        dh = grad @ self.fc2_w.T; dh_pre = dh * self.dropout_mask * (self.hidden_pre > 0)
         self.dfc1_w[...] = self.features.T @ dh_pre; self.dfc1_b[...] = dh_pre.sum(axis=0)
         df = dh_pre @ self.fc1_w.T
-        da3 = xp.broadcast_to(df[:, None, None, :] / (self.a3.shape[1] * self.a3.shape[2]), self.a3.shape).copy()
-        da2 = self.conv3.backward(da3 * (self.z3 > 0))
-        da1 = self.conv2.backward(da2 * (self.z2 > 0))
-        self.conv1.backward(da1 * (self.z1 > 0))
+        dp3 = xp.broadcast_to(df[:, None, None, :] / (self.p3.shape[1] * self.p3.shape[2]), self.p3.shape).copy()
+        da3 = self.pool3.backward(dp3); dp2 = self.conv3.backward(da3 * (self.z3 > 0))
+        da2b = self.pool2.backward(dp2); da2a = self.conv2b.backward(da2b * (self.z2b > 0))
+        dp1 = self.conv2a.backward(da2a * (self.z2a > 0)); da1b = self.pool1.backward(dp1)
+        da1a = self.conv1b.backward(da1b * (self.z1b > 0)); self.conv1a.backward(da1a * (self.z1a > 0))
         return float(loss), accuracy
 
     def state_dict(self) -> dict[str, np.ndarray]:

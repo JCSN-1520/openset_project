@@ -19,9 +19,9 @@ def evaluate(model, paths, labels, size, batch_size):
 def main():
     parser = argparse.ArgumentParser(description="纯 NumPy 开集识别训练")
     parser.add_argument("--dataset", choices=["dataset1", "dataset2"], required=True)
-    parser.add_argument("--data-root", default="data"); parser.add_argument("--epochs", type=int, default=70)
-    parser.add_argument("--batch-size", type=int, default=32); parser.add_argument("--image-size", type=int, default=96)
-    parser.add_argument("--lr", type=float, default=8e-4); parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--data-root", default="data"); parser.add_argument("--epochs", type=int, default=90)
+    parser.add_argument("--batch-size", type=int, default=24); parser.add_argument("--image-size", type=int, default=96)
+    parser.add_argument("--lr", type=float, default=5e-4); parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-ratio", type=float, default=.1, help="从全部样本中按类别留作验证的比例")
     parser.add_argument("--device", choices=["auto", "cpu", "gpu"], default="auto", help="auto 会优先使用 CuPy GPU")
     args = parser.parse_args(); print("计算设备：", configure_device(args.device)); rng = seed_everything(args.seed)
