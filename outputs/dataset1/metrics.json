@@ -3,7 +3,7 @@
   "classes": 50,
   "train_images": 2458,
   "valid_images": 276,
-  "best_valid_accuracy": 0.23550724637681159,
-  "confidence_threshold": 0.11369003817439079,
-  "distance_threshold": 23.191826438903824
+  "best_valid_accuracy": 0.44565217391304346,
+  "confidence_threshold": 0.17041131168603899,
+  "distance_threshold": 37.897929840087905
 }
