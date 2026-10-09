@@ -44,3 +44,9 @@ python app.py --dataset dataset1
 - `train.py`：训练入口
 - `predict.py`：单张图片预测入口
 - `app.py`：Tkinter 演示界面
+
+## Accuracy upgrade notes
+
+The current implementation keeps the NumPy/CuPy acceptance constraint while improving the main sources of error: aspect-ratio-preserving random-resized crops and center crops, ImageNet-style normalization, batch normalization, a deeper four-stage convolutional feature extractor, global mean plus max pooling, label smoothing, weight decay, gradient clipping, cosine learning-rate decay, and class-balanced sampling.
+
+After changing the network architecture, retrain both datasets before using the GUI. Old `outputs/*/best_model.npz` files are not compatible with the new architecture. Review `training_curves.png`, `confusion_matrix.png`, `metrics.json`, and `history.json` after training.
